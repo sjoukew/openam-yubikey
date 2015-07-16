@@ -35,11 +35,11 @@ import com.sun.identity.authentication.util.ISAuthConstants;
 import com.sun.identity.idm.*;
 import com.sun.identity.shared.datastruct.CollectionHelper;
 import com.sun.identity.shared.debug.Debug;
+import com.yubico.client.v2.ResponseStatus;
+import com.yubico.client.v2.VerificationResponse;
 import com.yubico.client.v2.YubicoClient;
-import com.yubico.client.v2.YubicoResponse;
-import com.yubico.client.v2.YubicoResponseStatus;
-import com.yubico.client.v2.exceptions.YubicoValidationException;
 import com.yubico.client.v2.exceptions.YubicoValidationFailure;
+import com.yubico.client.v2.exceptions.YubicoVerificationException;
 import org.apache.commons.lang.StringUtils;
 
 import java.security.Principal;
@@ -133,15 +133,13 @@ public class YubikeyModule extends AMLoginModule {
                 SSOTokenManager mgr = SSOTokenManager.getInstance();
                 InternalSession isess = getLoginState("Yubikey").getOldSession();
                 if (isess == null) {
-                    throw new AuthLoginException("amAuth", "noInternalSession",
-                            null);
+                    throw new AuthLoginException("amAuth", "noInternalSession",null);
                 }
                 SSOToken token = mgr.createSSOToken(isess.getID().toString());
                 UUID = token.getPrincipal().getName();
                 userName = token.getProperty("UserToken");
                 if (debug.messageEnabled()) {
-                    debug.message("OATH" + ".process() : " +
-                            "Username from SSOToken : " + userName);
+                    debug.message("OATH" + ".process() : Username from SSOToken : " + userName);
                 }
 
                 if (userName == null || userName.length() == 0) {
@@ -187,21 +185,18 @@ public class YubikeyModule extends AMLoginModule {
             throw new AuthLoginException(BUNDLE_NAME, "authFailed", null);
         }
         try {
-            YubicoClient client = YubicoClient.getClient(this.clientId);
-            if (StringUtils.isNotEmpty(secretKey)) {
-                client.setKey(this.secretKey);
-            }
+            YubicoClient client = YubicoClient.getClient(this.clientId, this.secretKey);
             if (wsapiUrls != null && wsapiUrls.length > 0) {
                 client.setWsapiUrls(this.wsapiUrls);
             }
-            YubicoResponse yubicoResponse = client.verify(otp);
-            return yubicoResponse.getStatus().equals(YubicoResponseStatus.OK) && yubicoResponse.getPublicId().equals(yubiKeyId);
-        } catch (YubicoValidationException e) {
-            throw new AuthLoginException(BUNDLE_NAME, "authFailed", null);
+            VerificationResponse yubicoResponse = client.verify(otp);
+            return yubicoResponse.getStatus().equals(ResponseStatus.OK) && yubicoResponse.getPublicId().equals(yubiKeyId);
+        } catch (YubicoVerificationException e) {
+            throw new AuthLoginException(BUNDLE_NAME, "authFailed", null, e);
         } catch (YubicoValidationFailure yubicoValidationFailure) {
-            throw new AuthLoginException(BUNDLE_NAME, "falidationFailed", new String[]{yubicoValidationFailure.getMessage()});
-        } catch (Exception e) {
-            throw new AuthLoginException(BUNDLE_NAME, "authFailed", null);
+            throw new AuthLoginException(BUNDLE_NAME, "falidationFailed", new String[]{yubicoValidationFailure.getMessage()}, yubicoValidationFailure);
+        } catch (Throwable throwable) {
+            throw new AuthLoginException(BUNDLE_NAME, "authFailed", null, throwable);
         }
     }
 
@@ -210,30 +205,21 @@ public class YubikeyModule extends AMLoginModule {
      *
      * @param id AMIdentity of user
      * @return yubikey identification for OTP validation
-     * @throws AuthLoginException
+     * @throws AuthLoginException the exception when the authentication fails.
      */
     private String getYubiKeyId(AMIdentity id) throws AuthLoginException {
         Set<String> yubiKeySet;
         try {
             if (StringUtils.isEmpty(yubikeyAttrName)) {
-                debug.error("Yubikey" +
-                        ".checkOTP() : " +
-                        "invalid secret key attribute name : ");
+                debug.error("Yubikey.checkOTP() : invalid secret key attribute name : ");
                 throw new AuthLoginException(BUNDLE_NAME, "authFailed", null);
             }
             yubiKeySet = id.getAttribute(yubikeyAttrName);
         } catch (IdRepoException e) {
-            debug.error("Yubikey" +
-                    ".checkOTP() : " +
-                    "error getting secret key attribute : ",
-                    e);
-            throw new AuthLoginException(BUNDLE_NAME, "authFailed", null);
+            debug.error("Yubikey.checkOTP() : error getting secret key attribute : ", e);
+            throw new AuthLoginException(BUNDLE_NAME, "authFailed", null, e);
         } catch (SSOException e) {
-            debug.error("Yubikey" +
-                    ".checkOTP() : " +
-                    "error invalid repo id : " +
-                    id,
-                    e);
+            debug.error("Yubikey.checkOTP() : error invalid repo id : " +id, e);
             throw new AuthLoginException(BUNDLE_NAME, "authFailed", null);
         }
         String yubiKey = yubiKeySet.iterator().next();
@@ -258,16 +244,12 @@ public class YubikeyModule extends AMLoginModule {
         Set<AMIdentity> results = Collections.EMPTY_SET;
         try {
             idsc.setMaxResults(0);
-            IdSearchResults searchResults =
-                    amIdRepo.searchIdentities(IdType.USER, uName, idsc);
+            IdSearchResults searchResults = amIdRepo.searchIdentities(IdType.USER, uName, idsc);
             if (searchResults != null) {
                 results = searchResults.getSearchResults();
             }
             if (results == null || results.size() != 1) {
-                throw new IdRepoException("Yubikey" +
-                        ".getIdentity : " +
-                        "More than one user found");
-
+                throw new IdRepoException("Yubikey.getIdentity : More than one user found");
             }
             theID = results.iterator().next();
         } catch (IdRepoException e) {
